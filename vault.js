@@ -1,0 +1,26 @@
+const FORMAT='fitassist-vault-v1',ITERATIONS=600000,enc=new TextEncoder(),dec=new TextDecoder();
+const b64=a=>{let s='';for(let i=0;i<a.length;i+=8192)s+=String.fromCharCode(...a.subarray(i,i+8192));return btoa(s);};
+const un64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const random=n=>crypto.getRandomValues(new Uint8Array(n));
+function validate(e){if(!e||e.format!==FORMAT||e.iterations!==ITERATIONS||typeof e.salt!=='string'||typeof e.iv!=='string'||typeof e.ciphertext!=='string'||e.ciphertext.length>28000000)throw Error('Нужна зашифрованная копия FitAssist');const salt=un64(e.salt),iv=un64(e.iv);if(salt.length!==16||iv.length!==12)throw Error('Повреждённая резервная копия');return {salt,iv};}
+async function derive(password,salt){if(typeof password!=='string'||password.length<10||password.length>200)throw Error('Пароль — от 10 до 200 символов');const material=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:ITERATIONS,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);}
+async function seal(value,key,salt){const iv=random(12),ciphertext=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode(FORMAT)},key,enc.encode(JSON.stringify(value)));return {format:FORMAT,iterations:ITERATIONS,salt:b64(salt),iv:b64(iv),ciphertext:b64(new Uint8Array(ciphertext))};}
+async function decrypt(envelope,password){const {salt,iv}=validate(envelope),key=await derive(password,salt);try{const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:enc.encode(FORMAT)},key,un64(envelope.ciphertext));return {key,salt,value:JSON.parse(dec.decode(plain))};}catch{throw Error('Неверный пароль или повреждённая копия');}}
+export function indexedStore(dbFactory=indexedDB){let db;const ready=new Promise((resolve,reject)=>{const request=dbFactory.open('fitassist-private-v1',1);request.onupgradeneeded=()=>request.result.createObjectStore('vault');request.onsuccess=()=>resolve(db=request.result);request.onerror=()=>reject(request.error);});return {async get(){await ready;return new Promise((resolve,reject)=>{const r=db.transaction('vault').objectStore('vault').get('main');r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>reject(r.error);});},async put(value,expected){await ready;return new Promise((resolve,reject)=>{const tx=db.transaction('vault','readwrite');let conflict;const object=tx.objectStore('vault'),get=object.get('main');get.onsuccess=()=>{if((get.result?.iv??null)!==expected){conflict=Object.assign(Error('Данные изменены в другом окне. Закрой это окно и открой приложение заново'),{status:409});tx.abort();return;}object.put(value,'main');};tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||Error('Не удалось сохранить данные'));tx.onabort=()=>reject(conflict||tx.error||Error('Сохранение прервано'));});}};}
+export async function openVault(store=indexedStore()){
+ let envelope=await store.get(),key=null,salt=null,value=null,chain=Promise.resolve(),aux={},writeFailure=null;
+ const enqueue=fn=>{const task=chain.then(fn);chain=task.catch(()=>{});return task;};
+ const need=()=>{if(!key||!value)throw Object.assign(Error('Разблокируй приложение'),{status:401});};
+ async function commit(next){need();const sealed=await seal(next,key,salt);try{await store.put(sealed,envelope?.iv??null);writeFailure=null;}catch(e){writeFailure=e;throw e;}envelope=sealed;value=next;}
+ const vault={exists:()=>!!envelope,unlocked:()=>!!key,
+  async create(password,initial){return enqueue(async()=>{if(envelope)throw Error('Данные уже созданы. Введи свой пароль');salt=random(16);const candidate=await derive(password,salt),next={data:structuredClone(initial),aux:{}};const sealed=await seal(next,candidate,salt);await store.put(sealed,null);key=candidate;value=next;envelope=sealed;aux={};});},
+  async unlock(password){return enqueue(async()=>{if(!envelope)throw Error('Сначала создай локальное хранилище');const result=await decrypt(envelope,password);if(!result.value?.data||!result.value.aux)throw Error('Повреждённые данные');key=result.key;salt=result.salt;value=result.value;aux={...value.aux};});},
+  read(){need();return structuredClone(value.data);},
+  async update(fn){return enqueue(async()=>{need();const next=structuredClone(value);await fn(next.data);await commit(next);return structuredClone(next.data);});},
+  async backup(){await chain;if(writeFailure)throw writeFailure;need();return structuredClone(envelope);},
+  async restore(input,password,clean){return enqueue(async()=>{need();const result=await decrypt(input,password),data=clean(result.value.data);await commit({data,aux:{}});aux={};});},
+  async lock(){await chain;if(writeFailure)throw writeFailure;need();key=null;salt=null;value=null;aux={};},
+  async drain(){await chain;if(writeFailure)throw writeFailure;},
+  storage:{getItem:k=>aux[k]??null,setItem(k,v){need();aux[k]=String(v);const snapshot={...aux};return enqueue(async()=>{need();await commit({...structuredClone(value),aux:snapshot});});},removeItem(k){need();delete aux[k];const snapshot={...aux};return enqueue(async()=>{need();await commit({...structuredClone(value),aux:snapshot});});}}
+ };return vault;
+}

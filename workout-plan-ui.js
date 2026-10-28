@@ -1,0 +1,19 @@
+import {findExercise} from './exercise-catalog.js';
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+export const swimNote=`В воде сначала 20–30 минут с отдыхом. Бассейн 25 м: один отрезок — до противоположного бортика. Телефон в воде не нужен. Дистанция — ориентир, а не обязательный минимум.
+
+1. Освоиться · без спешки
+Уточни присутствие спасателя. Если техника неуверенная, первое занятие лучше провести с инструктором. В мелкой части у бортика: вдох над водой, спокойный выдох в воду, без задержки дыхания. Выбирай знакомый стиль без дискомфорта в колене.
+
+2. Первые отрезки · 2 × 25 м
+Плыви знакомым удобным стилем, по одному отрезку. После каждых 25 м отдыхай 60–120 секунд или дольше, до спокойного дыхания. Не нужно плыть 50 м без остановки.
+
+3. По самочувствию · ещё 2–4 × 25 м
+Только если спокойно и остались силы. Между отрезками отдыхай 60–120 секунд или дольше. Возможный итог — 100–150 м, можно закончить раньше. Без спринтов, задержек дыхания и отдельных упражнений на ноги. Более короткие отрезки — только там, где безопасно встать, без разворота посреди дорожки.
+
+4. После воды · записать итог
+Нажми «Завершить», запиши фактическую дистанцию и самочувствие. В заметке можно указать дыхание и отдых. После двух комфортных посещений добавь только один отрезок 25 м, сохранив паузы.`;
+export function repLabel(e){if(Number.isInteger(e.repMin)&&Number.isInteger(e.repMax))return e.repMin===e.repMax?String(e.repMin):e.repMin+'–'+e.repMax;return String(e.reps??e.repTarget??10);}
+export function lessonSections(note){const text=String(note||'').trim(),lines=text.split('\n'),intro=[],steps=[];let step=null;for(const line of lines){const m=line.match(/^(\d{1,2})\.\s+(.+)$/);if(m){step={number:Number(m[1]),title:m[2],body:[]};steps.push(step);}else if(line.trim()){(step?step.body:intro).push(line.trim());}}return {intro:intro.join(' '),steps};}
+export function lessonView(note,type='swim'){const p=lessonSections(note);if(!p.steps.length)return `<div class="lesson-copy">${String(note||'').split(/\n\s*\n/).filter(Boolean).map(t=>'<p class="caption plan-note">'+esc(t)+'</p>').join('')}</div>`;return `<section class="lesson lesson-${esc(type)}" aria-label="Порядок занятия">${p.intro?'<p class="lesson-intro">'+esc(p.intro)+'</p>':''}<ol class="lesson-steps">${p.steps.map(s=>{const [title,...meta]=s.title.split(' · '),body=s.body.join(' '),rest=body.match(/(?:отдыхай|отдых)[^\d\n]{0,25}(\d+[–-]\d+)\s*секунд/i)?.[1];return `<li class="lesson-step"><span class="lesson-number" aria-hidden="true">${s.number}</span><div class="lesson-body"><h3>${esc(title)}</h3>${meta.length?'<p class="lesson-dose">'+esc(meta.join(' · '))+'</p>':''}${rest?'<p class="lesson-rest">Пауза '+esc(rest)+' сек</p>':''}<p class="lesson-description">${esc(body)}</p></div></li>`;}).join('')}</ol></section>`;}
+export function archiveView(records,exercise){const c=findExercise(exercise),r=(records||[]).find(r=>r.exerciseId===c?.id);if(!r?.sets?.length)return '';const weights=r.sets.map(s=>s.weight),reps=r.sets.map(s=>s.reps),range=a=>Math.min(...a)===Math.max(...a)?String(a[0]):Math.min(...a)+'–'+Math.max(...a);return `<details class="archive-result"><summary><span class="archive-label">Архив · ${esc(r.period)}</span><span class="archive-summary"><b>${range(weights)}</b><small>кг</small><span>×</span><b>${range(reps)}</b><small>повт.</small><span class="archive-chevron">⌄</span></span></summary><p class="caption mt12">${esc(r.equipment)}. Это запись из старой программы, не последнее занятие.</p><div class="archive-sets">${r.sets.map((s,i)=>`<span><small>${i+1}</small><strong>${s.weight}</strong> кг × <strong>${s.reps}</strong></span>`).join('')}</div><p class="caption mt12">Используй как ориентир, если это тот же снаряд и способ учёта веса. Начни с лёгкого пробного подхода и подбери нагрузку с запасом 3–4 повтора. Архив не участвует в автоматической прибавке.</p></details>`;}
